@@ -1,0 +1,105 @@
+name: Kinetic Studio — 5x Parallel YouTube Lead Scraper (15K Target)
+
+on:
+  workflow_dispatch:
+    inputs:
+      niche:
+        description: 'Which niche script(s) to run?'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - coaches
+          - tax_legal
+          - medical
+          - real_estate
+          - agency
+      target:
+        description: 'Target leads per niche CSV (e.g. 15000)'
+        required: true
+        default: '15000'
+      workers:
+        description: 'Parallel threads per cloud server (recommended: 10)'
+        required: true
+        default: '10'
+  schedule:
+    # Automatically runs every 6 hours to continue scraping until 15,000 leads per niche are complete
+    - cron: '0 */6 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  scrape-leads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: coaches
+            name: "Coaches, Consultants & Business"
+            script: "final_youtube_leads_scraper.py"
+            csv: "coaches_consultants_business_15k_new.csv"
+          - id: tax_legal
+            name: "Tax, CPA, Wealth & Attorneys"
+            script: "scrape_tax_legal_wealth_leads.py"
+            csv: "tax_legal_wealth_15k_new.csv"
+          - id: medical
+            name: "Cash-Pay Doctors & Clinics"
+            script: "scrape_medical_cash_clinics_leads.py"
+            csv: "medical_cash_clinics_15k_new.csv"
+          - id: real_estate
+            name: "Relocation RE, Syndicators & Builders"
+            script: "scrape_real_estate_syndicators_leads.py"
+            csv: "real_estate_syndicators_15k_new.csv"
+          - id: agency
+            name: "Boutique B2B Agencies"
+            script: "scrape_b2b_boutique_agencies_leads.py"
+            csv: "b2b_boutique_agencies_15k_new.csv"
+
+    steps:
+      - name: Checkout Repository (with MacBook Master Blacklist & CSVs)
+        if: ${{ github.event.inputs.niche == 'all' || github.event.inputs.niche == '' || github.event.inputs.niche == matrix.id }}
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        if: ${{ github.event.inputs.niche == 'all' || github.event.inputs.niche == '' || github.event.inputs.niche == matrix.id }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run ${{ matrix.name }} Scraper (Auto-Unlimited Queries | Zero MacBook Duplicates)
+        if: ${{ github.event.inputs.niche == 'all' || github.event.inputs.niche == '' || github.event.inputs.niche == matrix.id }}
+        run: |
+          TARGET="${{ github.event.inputs.target || '15000' }}"
+          WORKERS="${{ github.event.inputs.workers || '10' }}"
+          # Run for up to 330 minutes (5.5 hours) and save progress cleanly every 5 leads
+          timeout --signal=SIGINT 330m python3 "${{ matrix.script }}" --target "$TARGET" --workers "$WORKERS" || true
+
+      - name: Upload Lead CSV Artifact for 1-Click Download
+        if: ${{ always() && (github.event.inputs.niche == 'all' || github.event.inputs.niche == '' || github.event.inputs.niche == matrix.id) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: leads-${{ matrix.id }}
+          path: |
+            ${{ matrix.csv }}
+            macbook_master_blacklist.tsv
+          if-no-files-found: ignore
+
+      - name: Auto-Commit & Push Updated CSV & Blacklist to Repository
+        if: ${{ always() && (github.event.inputs.niche == 'all' || github.event.inputs.niche == '' || github.event.inputs.niche == matrix.id) }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main || git pull --rebase || true
+            git add "${{ matrix.csv }}" macbook_master_blacklist.tsv 2>/dev/null || true
+            git diff --staged --quiet || git commit -m "Auto-save verified leads for ${{ matrix.id }}"
+            if git push; then
+              echo "Pushed ${{ matrix.csv }} successfully!"
+              break
+            fi
+            sleep $((RANDOM % 10 + 3))
+          done
